@@ -174,4 +174,4 @@ include(tudatLinkLibraries)
 # Add ThesisTool application.
 add_executable(application_ThesisTool "${SRCROOT}/ThesisTool.cpp")
 setup_executable_target(application_ThesisTool "${SRCROOT}")
-target_link_libraries(application_ThesisTool tudat_gravitation tudat_basic_astrodynamics ${Boost_LIBRARIES} )
+target_link_libraries(application_ThesisTool tudat_gravitation tudat_basic_astrodynamics ${TUDAT_PROPAGATION_LIBRARIES} ${Boost_LIBRARIES} )
