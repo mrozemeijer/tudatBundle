@@ -40,14 +40,18 @@
 
 #include <ThesisTool/applicationOutput.h>
 
-// Body Properties which are not in the body map
-class BodyProperties {
-   public:
-      double referenceArea;   // Reference Area of the body
-      double Mass;
-};
+#include <ThesisTool/recoverymodels.h>
 
-//! Execute propagation of orbits of Apollo during entry.
+Eigen::Vector3d my_func(int t)
+{
+    return Eigen::Vector3d (1,0,0);
+}
+
+Eigen::Vector3d my_func2(void)
+{
+    return Eigen::Vector3d (1,0,0);
+}
+
 int main( )
 {
     ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -57,6 +61,7 @@ int main( )
     using namespace tudat::ephemerides;
     using namespace tudat::interpolators;
     using namespace tudat::numerical_integrators;
+    using namespace tudat::root_finders;
     using namespace tudat::spice_interface;
     using namespace tudat::simulation_setup;
     using namespace tudat::basic_astrodynamics;
@@ -66,6 +71,7 @@ int main( )
     using namespace tudat::aerodynamics;
     using namespace tudat::basic_mathematics;
     using namespace tudat::input_output;
+    using namespace tudat::propulsion;
     using namespace tudat;
 
     ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -81,7 +87,7 @@ int main( )
     const double simulationEndEpoch = 3100.0;
 
     // Set numerical integration fixed step size.
-    const double fixedStepSize = 1.0;
+    const double fixedStepSize = 0.5;
 
     // Define simulation body settings.
     std::vector< std::string > bodiesToCreate;
@@ -124,27 +130,59 @@ int main( )
     ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     ///////////////////////             CREATE VEHICLE            /////////////////////////////////////////////////////////
     ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    //// USER INPUTS ////
     BodyProperties FirstStage;
     BodyProperties Vehicle;
     BodyProperties UpperStage;
 
+    bool OrbitalLauncher=false;
+
+    InitialProperties InitialConditions;
+
+    InitialConditions.H0=0;
+    InitialConditions.V0=1;
+    InitialConditions.heading=0;
+    InitialConditions.flightpath=85;
+    InitialConditions.latitude=0;
+    InitialConditions.longitude=0;
+
     // Create vehicle aerodynamic coefficients
-    Vehicle.referenceArea = 50;
-    FirstStage.referenceArea = 50;
-    UpperStage.referenceArea = 50;
+    Vehicle.referenceArea = 0.0607;
+    FirstStage.referenceArea = 0.0607;
+    UpperStage.referenceArea = 0.0607;
 
-    Vehicle.Mass=5.0e3;
-    FirstStage.Mass=5.0e3;
-    UpperStage.Mass=5.0e3;
+    Vehicle.InitialWetMass=324;
+    FirstStage.InitialWetMass=324-16;
+    UpperStage.InitialWetMass=16;
 
-    bodyMap[ "Vehicle" ]->setConstantBodyMass( Vehicle.Mass );
-    bodyMap[ "First Stage" ]->setConstantBodyMass( FirstStage.Mass );
-    bodyMap[ "Upper Stage" ]->setConstantBodyMass( UpperStage.Mass );
+    Vehicle.InitialEmptyMass=100;
+    FirstStage.InitialEmptyMass=100;
+    UpperStage.InitialEmptyMass=16;
+
+    Vehicle.constantAOA=0;
+    FirstStage.constantAOA=0;
+    UpperStage.constantAOA=0;
+
+    // Set Which recovery System is used This can either be "Propulsive" "Parachute" "Rotor" "Winged"
+//    FirstStage.RecoverySystem={"Propulsive","Parachute"};
+
+    Vehicle.CDfile="C:/tudatBundle/thesisTool/ThesisTool/Vehicle_CD.txt";
+    Vehicle.CLfile="C:/tudatBundle/thesisTool/ThesisTool/Vehicle_CL.txt";
+
+    FirstStage.CDfile="C:/tudatBundle/thesisTool/ThesisTool/Vehicle_CD.txt";
+    FirstStage.CLfile="C:/tudatBundle/thesisTool/ThesisTool/Vehicle_CL.txt";
+
+    UpperStage.CDfile="C:/tudatBundle/thesisTool/ThesisTool/Vehicle_CD.txt";
+    UpperStage.CLfile="C:/tudatBundle/thesisTool/ThesisTool/Vehicle_CL.txt";
+
+    std::string launchThrustFile="C:/tudatBundle/thesisTool/ThesisTool/ThrustValues.txt";
 
     ///////////// SETTINGS FOR AERODYNAMICS VALUES ////////////
     // Define physical meaning of independent variables, in this case Mach number and angle of attack
     std::vector< aerodynamics::AerodynamicCoefficientsIndependentVariables > independentVariableNames;
     independentVariableNames.push_back( aerodynamics::mach_number_dependent );
+    independentVariableNames.push_back( aerodynamics::angle_of_attack_dependent );
 
     // Define reference frame in which the loaded coefficients are defined.
     bool areCoefficientsInAerodynamicFrame = true;
@@ -153,10 +191,8 @@ int main( )
     ///////////// DRAG FOR ENTIRE VEHICLE /////////////////////
     // Define list of files for force coefficients. Entry 0 denotes the x-direction (C ~D~/C ~X~), 1 the y-direction (C ~S~/C ~Y~) and 2 the z-direction (C ~L~/C ~Z~)
     std::map< int, std::string > forceCoefficientFiles1;
-    forceCoefficientFiles1[ 0 ] = "C:/tudatBundle/thesisTool/ThesisTool/Vehicle_CD.txt"; // Set drag coefficient file
-    std::cout << "Loaded CD Value Vehicle"<< std::endl;
-    forceCoefficientFiles1[ 2 ] = "C:/tudatBundle/thesisTool/ThesisTool/Vehicle_CL.txt"; // Set lift coefficient file
-    std::cout << "Loaded CL Value Vehicle"<<std::endl;
+    forceCoefficientFiles1[ 0 ] = Vehicle.CDfile; // Set drag coefficient file
+    forceCoefficientFiles1[ 2 ] = Vehicle.CLfile; // Set lift coefficient file
 
     // Load and parse files; create coefficient settings.
     std::shared_ptr< AerodynamicCoefficientSettings > aerodynamicCoefficientSettings1 =
@@ -165,14 +201,13 @@ int main( )
     // Create and set aerodynamic coefficients
     bodyMap[ "Vehicle" ]->setAerodynamicCoefficientInterface(
                         createAerodynamicCoefficientInterface( aerodynamicCoefficientSettings1, "Vehicle" ) );
+    std::cout << "Loaded Aerodynamic Data: Vehicle"<<std::endl;
 
     ///////////// DRAG FOR FIRST STAGE ///////////////////////
     // Define list of files for force coefficients. Entry 0 denotes the x-direction (C ~D~/C ~X~), 1 the y-direction (C ~S~/C ~Y~) and 2 the z-direction (C ~L~/C ~Z~)
     std::map< int, std::string > forceCoefficientFiles2;
-    forceCoefficientFiles2[ 0 ] = "C:/tudatBundle/thesisTool/ThesisTool/Vehicle_CD.txt"; // Set drag coefficient file
-    std::cout << "Loaded CD Value First Stage" << std::endl;
-    forceCoefficientFiles2[ 2 ] = "C:/tudatBundle/thesisTool/ThesisTool/Vehicle_CL.txt"; // Set lift coefficient file
-    std::cout << "Loaded CL Value First Stage" << std::endl;
+    forceCoefficientFiles2[ 0 ] = FirstStage.CDfile; // Set drag coefficient file
+    forceCoefficientFiles2[ 2 ] = FirstStage.CLfile; // Set lift coefficient file
 
     // Load and parse files; create coefficient settings.
     std::shared_ptr< AerodynamicCoefficientSettings > aerodynamicCoefficientSettings2 =
@@ -181,14 +216,12 @@ int main( )
     // Create and set aerodynamic coefficients
     bodyMap[ "First Stage" ]->setAerodynamicCoefficientInterface(
                         createAerodynamicCoefficientInterface( aerodynamicCoefficientSettings2, "First Stage" ) );
-
+    std::cout << "Loaded Aerodynamic Data : First Stage"<<std::endl;
     ///////////// DRAG FOR FIRST STAGE /////////////////////////
     // Define list of files for force coefficients. Entry 0 denotes the x-direction (C ~D~/C ~X~), 1 the y-direction (C ~S~/C ~Y~) and 2 the z-direction (C ~L~/C ~Z~)
     std::map< int, std::string > forceCoefficientFiles3;
-    forceCoefficientFiles3[ 0 ] = "C:/tudatBundle/thesisTool/ThesisTool/Vehicle_CD.txt"; // Set drag coefficient file
-    std::cout << "Loaded CD Value Upper Stage" << std::endl;
-    forceCoefficientFiles3[ 2 ] = "C:/tudatBundle/thesisTool/ThesisTool/Vehicle_CL.txt"; // Set lift coefficient file
-    std::cout << "Loaded CL Value Upper Stage" << std::endl;
+    forceCoefficientFiles3[ 0 ] = UpperStage.CDfile; // Set drag coefficient file
+    forceCoefficientFiles3[ 2 ] = UpperStage.CLfile; // Set lift coefficient file
 
     // Load and parse files; create coefficient settings.
     std::shared_ptr< AerodynamicCoefficientSettings > aerodynamicCoefficientSettings3 =
@@ -197,6 +230,25 @@ int main( )
     // Create and set aerodynamic coefficients
     bodyMap[ "Upper Stage" ]->setAerodynamicCoefficientInterface(
                         createAerodynamicCoefficientInterface( aerodynamicCoefficientSettings3, "Upper Stage" ) );
+    std::cout << "Loaded Aerodynamic Data : Upper Stage"<<std::endl;
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    ///////////////////////////////        Recovery Models     ////////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    FirstStage.setFixedRecMass();
+    UpperStage.FixedRecMass=0;
+    /// Creating Total Masses
+    FirstStage.setTotalMass();
+//    FirstStage.setRecoveryMass();
+//    FirstStage.TotalMass=FirstStage.InitialWetMass+FirstStage.RecoveryMass+FirstStage.FixedRecMass;
+    if (OrbitalLauncher==false){
+        UpperStage.TotalMass=UpperStage.InitialWetMass;
+    };
+    Vehicle.TotalMass=FirstStage.TotalMass+UpperStage.TotalMass;
+
+    bodyMap[ "Vehicle" ]->setConstantBodyMass( Vehicle.TotalMass );
+    bodyMap[ "First Stage" ]->setConstantBodyMass( FirstStage.TotalMass );
+    bodyMap[ "Upper Stage" ]->setConstantBodyMass( UpperStage.TotalMass );
 
     // Finalize body creation.
     setGlobalFrameBodyEphemerides( bodyMap, "SSB", "J2000" );
@@ -213,7 +265,12 @@ int main( )
     const std::string cppFilePath( __FILE__ );
     const std::string cppFolder = cppFilePath.substr( 0 , cppFilePath.find_last_of("/\\")+1 );
     std::shared_ptr< FromFileDataMapSettings< Eigen::Vector3d > > thrustDataSettings =
-            std::make_shared< FromFileDataMapSettings< Eigen::Vector3d > >( cppFolder + "testThrustValues.txt" );
+            std::make_shared< FromFileDataMapSettings< Eigen::Vector3d > >( launchThrustFile );
+
+    // Direction Based Guidance
+    std::function< Eigen::Vector3d(const double) > thrustunitfunction=my_func;
+    std::function< Eigen::Vector3d() > bodyunitfunc=my_func2;
+    std::make_shared<DirectionBasedForceGuidance> ( thrustunitfunction,"Vehicle",bodyunitfunc);
 
     // Define interpolator settings.
     std::shared_ptr< InterpolatorSettings > thrustInterpolatorSettings =
@@ -225,15 +282,17 @@ int main( )
                 thrustDataSettings, thrustInterpolatorSettings );
 
     // Define specific impulse
-    double constantSpecificImpulse = 3000.0;
+    double constantSpecificImpulse = 210.0;
 
     // Define propagation settings.
     std::map< std::string, std::vector< std::shared_ptr< AccelerationSettings > > > accelerationsOfVehicle;
-    accelerationsOfVehicle[ "Earth" ].push_back( std::make_shared< AccelerationSettings >(
-                                                     basic_astrodynamics::central_gravity ) );
     accelerationsOfVehicle[ "Vehicle" ].push_back( std::make_shared< ThrustAccelerationSettings >(
                                                        thrustDataInterpolatorSettings, constantSpecificImpulse,
                                                        lvlh_thrust_frame, "Earth" ) );
+    std::cout << "Thrust Loaded"<<std::endl;
+    accelerationsOfVehicle[ "Earth" ].push_back( std::make_shared< SphericalHarmonicAccelerationSettings >( 4, 0 ) );
+    accelerationsOfVehicle[ "Earth" ].push_back( std::make_shared< AccelerationSettings >( aerodynamic ) );
+
 
     accelerationMap[ "Vehicle" ] = accelerationsOfVehicle;
     bodiesToPropagate.push_back( "Vehicle" );
@@ -243,6 +302,10 @@ int main( )
     basic_astrodynamics::AccelerationMap accelerationModelMap = createAccelerationModelsMap(
                 bodyMap, accelerationMap, bodiesToPropagate, centralBodies );
 
+        bodyMap.at( "Vehicle" )->getFlightConditions( )->getAerodynamicAngleCalculator( )->setOrientationAngleFunctions(
+                [=]( ){ return Vehicle.constantAOA; } );
+    std::cout << "Acceleration Map Set"<<std::endl;
+
     ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     ///////////////////////             CREATE PROPAGATION SETTINGS            ////////////////////////////////////////////
     ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -251,55 +314,81 @@ int main( )
     // Set initial conditions for the vehicle satellite that will be propagated in this simulation.
     // The initial conditions are given in Keplerian elements and later on converted to Cartesian
     // elements.
-    // Set Keplerian elements for vehicle.
-    Eigen::Vector6d vehicleInitialStateInKeplerianElements;
-    vehicleInitialStateInKeplerianElements( semiMajorAxisIndex ) = 72130.0e3;
-    vehicleInitialStateInKeplerianElements( eccentricityIndex ) = 0.6;
-    vehicleInitialStateInKeplerianElements( inclinationIndex ) = convertDegreesToRadians( 169.0 );
-    vehicleInitialStateInKeplerianElements( argumentOfPeriapsisIndex ) = convertDegreesToRadians( 45.0 );
-    vehicleInitialStateInKeplerianElements( longitudeOfAscendingNodeIndex ) = convertDegreesToRadians( 80.0 );
-    vehicleInitialStateInKeplerianElements( trueAnomalyIndex ) = convertDegreesToRadians( 15.0 );
+    // Set Initial location of the vehicle
+    Eigen::Vector6d InitialLaunchState;
+    InitialLaunchState( SphericalOrbitalStateElementIndices::radiusIndex ) =
+            spice_interface::getAverageRadius( "Earth" ) + InitialConditions.H0;
+    InitialLaunchState( SphericalOrbitalStateElementIndices::latitudeIndex ) =
+            unit_conversions::convertDegreesToRadians( InitialConditions.latitude );
+    InitialLaunchState( SphericalOrbitalStateElementIndices::longitudeIndex ) =
+            unit_conversions::convertDegreesToRadians( InitialConditions.longitude );
+    InitialLaunchState( SphericalOrbitalStateElementIndices::speedIndex ) = InitialConditions.V0;
+    InitialLaunchState( SphericalOrbitalStateElementIndices::flightPathIndex ) =
+            unit_conversions::convertDegreesToRadians( InitialConditions.flightpath );
+    InitialLaunchState( SphericalOrbitalStateElementIndices::headingAngleIndex ) =
+            unit_conversions::convertDegreesToRadians( InitialConditions.heading );
+    // Convert apollo state from spherical elements to Cartesian elements.
+    Eigen::Vector6d systemInitialState = convertSphericalOrbitalToCartesianState(
+                InitialLaunchState );
+    std::cout << "Initial Conditions Set"<<std::endl;
 
-    // Convert vehicle state from Keplerian elements to Cartesian elements.
-    double earthGravitationalParameter = bodyMap.at( "Earth" )->getGravityFieldModel( )->getGravitationalParameter( );
-    Eigen::VectorXd systemInitialState = convertKeplerianToCartesianElements( vehicleInitialStateInKeplerianElements,
-                                                                              earthGravitationalParameter );
+    // Convert the state to the global (inertial) frame.
+    std::shared_ptr< ephemerides::RotationalEphemeris > earthRotationalEphemeris =
+            bodyMap.at( "Earth" )->getRotationalEphemeris( );
+    systemInitialState = transformStateToGlobalFrame( systemInitialState, simulationStartEpoch, earthRotationalEphemeris );
 
-    // Define propagation termination conditions (stop after 2 weeks).
-    std::shared_ptr< PropagationTimeTerminationSettings > terminationSettings =
-            std::make_shared< propagators::PropagationTimeTerminationSettings >( 4.0E6 );
+    // Define propagation termination conditions (when altitude is 0m).
+    std::shared_ptr< SingleDependentVariableSaveSettings > terminationDependentVariable  =
+          std::make_shared< SingleDependentVariableSaveSettings >(
+              altitude_dependent_variable, "Vehicle", "Earth" );
+
+    std::shared_ptr< PropagationTerminationSettings > terminationSettings =
+            std::make_shared < propagators::PropagationDependentVariableTerminationSettings>
+            (terminationDependentVariable,-1e3,true);
+
 
     // Define settings for propagation of translational dynamics.
     std::shared_ptr< TranslationalStatePropagatorSettings< double > > translationalPropagatorSettings =
             std::make_shared< TranslationalStatePropagatorSettings< double > >(
                 centralBodies, accelerationModelMap, bodiesToPropagate, systemInitialState, terminationSettings );
 
-    // Crete mass rate models
+    // Create mass rate models
+    std::shared_ptr< MassRateModelSettings > massRateModelSettings =
+            std::make_shared< FromThrustMassModelSettings >( true );
     std::map< std::string, std::shared_ptr< basic_astrodynamics::MassRateModel > > massRateModels;
-    massRateModels[ "Vehicle" ] = createMassRateModel( "Vehicle", std::make_shared< FromThrustMassModelSettings >( 1 ),
-                                                       bodyMap, accelerationModelMap );
+    massRateModels[ "Vehicle" ] = createMassRateModel(
+                "Vehicle", massRateModelSettings, bodyMap, accelerationModelMap );
 
-    // Create settings for propagating the mass of the vehicle
-    std::shared_ptr< MassPropagatorSettings< double > > massPropagatorSettings =
-            std::make_shared< MassPropagatorSettings< double > >( std::vector< std::string >{ "Vehicle" }, massRateModels,
-                                                                  ( Eigen::Matrix< double, 1, 1 >( ) << Vehicle.Mass ).finished( ),
-                                                                  terminationSettings );
+    // Create settings for propagating the mass of the vehicle.
+    std::vector< std::string > bodiesWithMassToPropagate;
+    bodiesWithMassToPropagate.push_back( "Vehicle" );
+
+    Eigen::VectorXd initialBodyMasses = Eigen::VectorXd( 1 );
+    initialBodyMasses( 0 ) = Vehicle.TotalMass;
+
+    std::shared_ptr< SingleArcPropagatorSettings< double > > massPropagatorSettings =
+        std::make_shared< MassPropagatorSettings< double > >(
+            bodiesWithMassToPropagate, massRateModels, initialBodyMasses, terminationSettings );
+
+    // Define list of dependent variables to save.
+    std::vector< std::shared_ptr< SingleDependentVariableSaveSettings > > dependentVariablesList;
+    dependentVariablesList.push_back( std::make_shared< SingleAccelerationDependentVariableSaveSettings >(
+                                          basic_astrodynamics::thrust_acceleration, "Vehicle", "Vehicle", 1 ) );
+    dependentVariablesList.push_back( std::make_shared< SingleDependentVariableSaveSettings >(
+                                          lvlh_to_inertial_frame_rotation_dependent_variable, "Vehicle", "Earth" ) );
+    dependentVariablesList.push_back( std::make_shared< SingleDependentVariableSaveSettings >(mach_number_dependent_variable, "Vehicle" ) );
+    dependentVariablesList.push_back( std::make_shared< SingleDependentVariableSaveSettings >(total_acceleration_dependent_variable, "Vehicle" ) );
+    dependentVariablesList.push_back( std::make_shared< SingleDependentVariableSaveSettings >(altitude_dependent_variable,"Vehicle","Earth"));
+
+    // Create object with list of dependent variables
+    std::shared_ptr< DependentVariableSaveSettings > dependentVariablesToSave =
+            std::make_shared< DependentVariableSaveSettings >( dependentVariablesList );
 
     // Create list of propagation settings.
     std::vector< std::shared_ptr< SingleArcPropagatorSettings< double > > > propagatorSettingsVector;
     propagatorSettingsVector.push_back( translationalPropagatorSettings );
     propagatorSettingsVector.push_back( massPropagatorSettings );
 
-    // Define list of dependent variables to save.
-    std::vector< std::shared_ptr< SingleDependentVariableSaveSettings > > dependentVariablesList;
-    dependentVariablesList.push_back( std::make_shared< SingleAccelerationDependentVariableSaveSettings >(
-                                          basic_astrodynamics::thrust_acceleration, "Vehicle", "Vehicle", 0 ) );
-    dependentVariablesList.push_back( std::make_shared< SingleDependentVariableSaveSettings >(
-                                          lvlh_to_inertial_frame_rotation_dependent_variable, "Vehicle", "Earth" ) );
-
-    // Create object with list of dependent variables
-    std::shared_ptr< DependentVariableSaveSettings > dependentVariablesToSave =
-            std::make_shared< DependentVariableSaveSettings >( dependentVariablesList );
 
     // Create propagation settings for mass and translational dynamics concurrently
     std::shared_ptr< PropagatorSettings< > > propagatorSettings =
@@ -308,5 +397,59 @@ int main( )
 
     // Define integrator settings
     std::shared_ptr< IntegratorSettings< > > integratorSettings =
-            std::make_shared< IntegratorSettings< > >( rungeKutta4, 0.0, 30.0 );
+            std::make_shared< IntegratorSettings< > >( rungeKutta4, 0.0, fixedStepSize);
+    std::cout << "Propagation properties set"<<std::endl;
+    ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    /////////////////////////////             PROPAGATE            ////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    // Create simulation object and propagate dynamics.
+    SingleArcDynamicsSimulator< > dynamicsSimulator(bodyMap, integratorSettings, propagatorSettings );
+    std::cout << "Propagation Complete"<<std::endl;
+    std::map< double, Eigen::VectorXd > integrationResult = dynamicsSimulator.getEquationsOfMotionNumericalSolution( );
+    std::map< double, Eigen::VectorXd > dependentVariableResult = dynamicsSimulator.getDependentVariableHistory( );
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    ///////////////////////        PROVIDE OUTPUT TO CONSOLE AND FILES           //////////////////////////////////////////
+    ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    std::string outputSubFolder = "Results/";
+
+    Eigen::VectorXd finalIntegratedState = ( --integrationResult.end( ) )->second;
+    // Print the position (in km) and the velocity (in km/s) at t = 0.
+    std::cout << "Propagation Information" << std::endl <<
+                 "The initial position vector of the vehicle is [km]:" << std::endl <<
+                 systemInitialState.segment( 0, 3 ) / 1E3 << std::endl <<
+                 "The initial velocity vector of the vehicle is [km/s]:" << std::endl <<
+                 systemInitialState.segment( 3, 3 ) / 1E3 << std::endl;
+
+    // Print the position (in km) and the velocity (in km/s) at t = 100.
+    std::cout << "After " << 100 <<
+                 " seconds, the position vector of the vehicle is [km]:" << std::endl <<
+                 finalIntegratedState.segment( 0, 3 ) / 1E3 << std::endl <<
+                 "And the velocity vector of the vehicle is [km/s]:" << std::endl <<
+                 finalIntegratedState.segment( 3, 3 ) / 1E3 << std::endl;
+
+    // Write satellite propagation history to file.
+    input_output::writeDataMapToTextFile( dependentVariableResult,
+                                          "DependentVariableOutput.dat",
+                                          tudat_applications::getOutputPath( ) + outputSubFolder,
+                                          "",
+                                          std::numeric_limits< double >::digits10,
+                                          std::numeric_limits< double >::digits10,
+                                          "," );
+
+    // Write satellite propagation history to file.
+    input_output::writeDataMapToTextFile( integrationResult,
+                                          "PropagationOutput.dat",
+                                          tudat_applications::getOutputPath( ) + outputSubFolder,
+                                          "",
+                                          std::numeric_limits< double >::digits10,
+                                          std::numeric_limits< double >::digits10,
+                                          "," );
+
+
+    // Final statement.
+    // The exit code EXIT_SUCCESS indicates that the program was successfully executed.
+    return EXIT_SUCCESS;
 }
