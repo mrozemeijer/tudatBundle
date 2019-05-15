@@ -1,0 +1,4 @@
+#ifndef RECOVERYMODELS_H
+#define RECOVERYMODELS_H
+
+#endif // RECOVERYMODELS_H
